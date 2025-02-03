@@ -1,8 +1,7 @@
-# train.py
 import torch
 import json
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
 from model import CNN
 
@@ -18,7 +17,7 @@ def compute_stats(dataset):
     return mean, std
 
 def train_model(epochs=5, batch_size=64, learning_rate=0.001, 
-                model_save_path='cnn_mnist.pth', stats_path='stats.json'):
+                model_save_path='cnn_mnist.pth', stats_path='stats.json', validation_split=0.1):
     
     # Load dataset with only ToTensor so we can compute stats
     base_transform = transforms.ToTensor()
@@ -39,8 +38,14 @@ def train_model(epochs=5, batch_size=64, learning_rate=0.001,
     ])
     
     # Reload training dataset with the final transform (normalization)
-    train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=final_transform)
+    full_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=final_transform)
+    total_len = len(full_dataset)
+    val_size = int(total_len * validation_split)
+    train_size = total_len - val_size
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = CNN().to(device)
@@ -49,6 +54,7 @@ def train_model(epochs=5, batch_size=64, learning_rate=0.001,
     
     print("Starting training...")
     for epoch in range(epochs):
+        # Training phase
         model.train()
         running_loss = 0.0
         for batch_idx, (images, labels) in enumerate(train_loader):
@@ -59,9 +65,31 @@ def train_model(epochs=5, batch_size=64, learning_rate=0.001,
             loss.backward()               # backpropagation
             optimizer.step()              # weight update
             running_loss += loss.item()
-            
-        avg_loss = running_loss / len(train_loader)
-        print(f"Epoch [{epoch+1}/{epochs}] Loss: {avg_loss:.4f}")
+        
+        avg_train_loss = running_loss / len(train_loader)
+        
+        # Validation phase
+        model.eval()
+        val_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, preds = torch.max(outputs, 1)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+        
+        avg_val_loss = val_loss / len(val_loader)
+        val_accuracy = correct / total
+        
+        print(f"Epoch [{epoch+1}/{epochs}] "
+              f"Train Loss: {avg_train_loss:.4f} "
+              f"Val Loss: {avg_val_loss:.4f} "
+              f"Val Accuracy: {val_accuracy:.4f}")
     
     # Save the model state
     torch.save(model.state_dict(), model_save_path)
@@ -69,4 +97,3 @@ def train_model(epochs=5, batch_size=64, learning_rate=0.001,
 
 if __name__ == '__main__':
     train_model()
-    
